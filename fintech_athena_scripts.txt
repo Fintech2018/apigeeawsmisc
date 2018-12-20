@@ -1,0 +1,116 @@
+#database
+@fintech_db
+CREATE DATABASE IF NOT EXISTS fintech_db
+LOCATION 's3://fintech-lambda-output/db'
+
+-----------------------------------------------------------
+
+#Tables
+@entitiestbl
+
+CREATE EXTERNAL TABLE entitiestbl(
+  reviewrequestid string COMMENT 'from deserializer', 
+  entities array<struct<type:string,text:string>> COMMENT 'from deserializer', 
+  gender string COMMENT 'from deserializer', 
+  source string COMMENT 'from deserializer')
+ROW FORMAT SERDE 
+  'org.openx.data.jsonserde.JsonSerDe' 
+  'org.apache.hadoop.hive.ql.io.IgnoreKeyTextOutputFormat'
+
+LOCATION
+  's3://fintech-lambda-output/output/Entities'
+  
+@keyphrasetbl
+
+ CREATE EXTERNAL TABLE keyphrasetbl(
+  reviewrequestid string COMMENT 'from deserializer', 
+  keyphrases array<struct<text:string>> COMMENT 'from deserializer')
+ROW FORMAT SERDE 
+  'org.openx.data.jsonserde.JsonSerDe' 
+
+LOCATION
+  's3://fintech-lambda-output/output/KeyPhrase'
+  
+@sentimenttbl
+  
+  CREATE EXTERNAL TABLE sentimenttbl(
+  reviewrequestid string COMMENT 'from deserializer', 
+  sentiment string COMMENT 'from deserializer')
+ROW FORMAT SERDE 
+  'org.openx.data.jsonserde.JsonSerDe' 
+
+LOCATION
+  's3://fintech-lambda-output/output/Sentiment'
+  
+-----------------------------------------------------------  
+#Views
+
+@keyphrasevw
+
+CREATE OR REPLACE VIEW keyphrasevw AS 
+SELECT
+  "reviewrequestid"
+, "unnested_series"."series_entry"."text" "LOB"
+FROM
+  (keyphrasetbl keyp
+CROSS JOIN UNNEST("keyp"."keyphrases") unnested_series (series_entry))
+WHERE ("lower"("unnested_series"."series_entry"."text") IN ('investment advisory', 'custody service', 'fund administration'))
+
+@locationvw
+CREATE OR REPLACE VIEW locationvw AS 
+SELECT
+  "reviewrequestid"
+, "unnested_series"."series_entry"."text" "LOCATION"
+FROM
+  (entitiestbl entity
+CROSS JOIN UNNEST("entity"."entities") unnested_series (series_entry))
+WHERE ("unnested_series"."series_entry"."type" = 'LOCATION')
+
+@personvw
+
+CREATE OR REPLACE VIEW personvw AS 
+SELECT
+  "reviewrequestid"
+, "unnested_series"."series_entry"."text" "PERSON"
+FROM
+  (entitiestbl entity
+CROSS JOIN UNNEST("entity"."entities") unnested_series (series_entry))
+WHERE ("unnested_series"."series_entry"."type" = 'PERSON')
+
+@reviewdatevw
+CREATE OR REPLACE VIEW reviewdatevw AS 
+SELECT
+  "reviewrequestid"
+, "unnested_series"."series_entry"."text" "YEAR"
+FROM
+  (entitiestbl entity
+CROSS JOIN UNNEST("entity"."entities") unnested_series (series_entry))
+WHERE ("unnested_series"."series_entry"."type" = 'DATE')
+
+@sourcevw
+CREATE OR REPLACE VIEW sourcevw AS 
+SELECT
+  "reviewrequestid"
+, "unnested_series"."series_entry"."text" "source"
+FROM
+  (keyphrasetbl keyp
+CROSS JOIN UNNEST("keyp"."keyphrases") unnested_series (series_entry))
+WHERE ("lower"("unnested_series"."series_entry"."text") IN ('email', 'emaili', 'twitter', 'twitterfeed', 'twitteri', 'xyzabci', 'fileupload', 'fileuploadi', 'file-upload', 'negative_feedback', 'positive_feedback', 'neutral_feedback', 'submitt_feedback'))
+
+@quicksightvw
+CREATE OR REPLACE VIEW quicksightvw AS 
+SELECT
+  "ent"."gender"
+, "sou"."source"
+, "sen"."sentiment" "sentiment"
+, "keyp"."lob"
+, "loc"."location"
+, "substr"("rev"."year", 7, 4) "year"
+FROM
+  (((((entitiestbl ent
+LEFT JOIN sentimenttbl sen ON ("sen"."reviewrequestid" = "ent"."reviewrequestid"))
+LEFT JOIN keyphrasevw keyp ON ("keyp"."reviewrequestid" = "sen"."reviewrequestid"))
+LEFT JOIN locationvw loc ON ("loc"."reviewrequestid" = "keyp"."reviewrequestid"))
+LEFT JOIN reviewdatevw rev ON ("rev"."reviewrequestid" = "loc"."reviewrequestid"))
+LEFT JOIN sourcevw sou ON ("sou"."reviewrequestid" = "rev"."reviewrequestid"))
+WHERE ((((("substr"("rev"."year", 7, 4) <> '') AND ("loc"."location" <> '')) AND ("keyp"."lob" <> '')) AND ("sen"."sentiment" <> '')) AND ("sou"."source" <> ''))
